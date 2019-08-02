@@ -447,24 +447,49 @@ class BottomUpParser(object):
                 lstm_scores_connect.append(self.f_connect(get_span_encoding(left,right+1)))
             else:
                 lstm_scores_connect.append(self.f_connect(get_span_encoding(left, right)))
-        #得到第一层的标签是否相连的预测结果，得到第一层的标签结果
-        connect_tree_0 = []
-        if is_train:
-            connect_tree_0 = connect_tree[0][:]
-        level_gold_0 = []
-        if is_train:
-            for label in level_gold[0]:
-                level_gold_0.append(self.label_vocab.index(label))
-        connect_1, loss_connect = self.crf_connect(lstm_scores_connect, connect_tree_0)
-        label_1, loss_label = self.crf(lstm_scores_labels, level_gold_0)
 
-        #得到了第一层的标签结果，识别出了最底层的单独一个词构成的短语
-        if is_train:
-            first_level_label = level_gold[0]
-        else:
-            first_level_label = []
-            for label_index in label_1:
-                first_level_label.append(self.label_vocab.value(label_index))
+        label_loss = 0
+        first_level_label = []
+        for i in range(len(lstm_scores_labels)):
+            if is_train:
+                oracle_label = level_gold[0][i]
+                oracle_label_index = self.label_vocab.index(oracle_label)
+                lstm_scores_labels[i] = augment(lstm_scores_labels[i], oracle_label_index)
+                label_scores_np = lstm_scores_labels[i].npvalue()
+                argmax_label_index = int(label_scores_np.argmax())
+                argmax_label = self.label_vocab.value(argmax_label_index)
+                label = argmax_label if explore else oracle_label
+                label_loss = label_loss + (
+                    lstm_scores_labels[i][argmax_label_index] -
+                    lstm_scores_labels[i][oracle_label_index]
+                    if argmax_label != oracle_label else dy.zeros(1))
+                first_level_label.append(label)
+            else:
+                label_scores_np = lstm_scores_labels[i].npvalue()
+                argmax_label_index = int(label_scores_np.argmax())
+                argmax_label = self.label_vocab.value(argmax_label_index)
+                label = argmax_label
+                label_loss = lstm_scores_labels[i][argmax_label_index]
+                first_level_label.append(label)
+        connect_loss = 0
+        first_level_connect = []
+        for i in range(len(lstm_scores_connect)):
+            if is_train:
+                oracle_connect = connect_tree[0][i]
+                lstm_scores_connect[i] = augment(lstm_scores_connect[i], oracle_connect)
+                connect_scores_np = lstm_scores_connect[i].npvalue()
+                argmax_connect = int(connect_scores_np.argmax())
+                connect_loss = connect_loss + (
+                    lstm_scores_connect[i][argmax_connect]-
+                    lstm_scores_connect[i][oracle_connect]
+                    if argmax_connect != oracle_connect else dy.zeros(1))
+            else:
+                connect_scores_np = lstm_scores_connect[i].npvalue()
+                argmax_connect = int(connect_scores_np.argmax())
+                connect = argmax_connect
+                connect_loss = argmax_connect
+                first_level_connect.append(connect)
+
         tree = []
         for le in range(len(sentence)):
             if first_level_label[le] != "0":
@@ -496,23 +521,55 @@ class BottomUpParser(object):
                 else:
                     lstm_scores_connect.append(self.f_connect(get_span_encoding(span[q][0], span[q][1])))
 
-            next_labels_int = []
-            for label in next_labels:
-                next_labels_int.append(self.label_vocab.index(label))
-            labels, loss_i_label = self.crf(lstm_scores_labels, next_labels_int)
-            connect, loss_i_connect = self.crf_connect(lstm_scores_connect, next_connect)
+            #以下为第二次修改内容
+            loss_i_label = 0
+            level_label = []
+            for i in range(len(lstm_scores_labels)):
+                if is_train:
+                    oracle_label = next_labels[i]
+                    oracle_label_index = self.label_vocab.index(oracle_label)
+                    lstm_scores_labels[i] = augment(lstm_scores_labels[i], oracle_label_index)
+                    label_scores_np = lstm_scores_labels[i].npvalue()
+                    argmax_label_index = int(label_scores_np.argmax())
+                    argmax_label = self.label_vocab.value(argmax_label_index)
+                    label = argmax_label if explore else oracle_label
+                    loss_i_label = loss_i_label + (
+                        lstm_scores_labels[i][argmax_label_index] -
+                        lstm_scores_labels[i][oracle_label_index]
+                        if argmax_label != oracle_label else dy.zeros(1))
+                    level_label.append(label)
+                else:
+                    label_scores_np = lstm_scores_labels[i].npvalue()
+                    argmax_label_index = int(label_scores_np.argmax())
+                    argmax_label = self.label_vocab.value(argmax_label_index)
+                    label = argmax_label
+                    loss_i_label = lstm_scores_labels[i][argmax_label_index]
+                    level_label.append(label)
+            loss_i_connect = 0
+            level_connect = []
+            for i in range(len(lstm_scores_connect)):
+                if is_train:
+                    oracle_connect = next_connect[i]
+                    lstm_scores_connect[i] = augment(lstm_scores_connect[i], oracle_connect)
+                    connect_scores_np = lstm_scores_connect[i].npvalue()
+                    argmax_connect = int(connect_scores_np.argmax())
+                    loss_i_connect = loss_i_connect + (
+                        lstm_scores_connect[i][argmax_connect] -
+                        lstm_scores_connect[i][oracle_connect]
+                        if argmax_connect != oracle_connect else dy.zeros(1))
+                else:
+                    connect_scores_np = lstm_scores_connect[i].npvalue()
+                    argmax_connect = int(connect_scores_np.argmax())
+                    connect = argmax_label
+                    loss_i_connect = lstm_scores_connect[i][argmax_connect]
+                    level_connect.append(connect)
+            #############################################################
+
+            return level_label, loss_i_label, level_connect, loss_i_connect
 
 
-            labels_value = []
-            for label in labels:
-                labels_value.append(self.label_vocab.value(label))
-            return labels_value, loss_i_label, connect, loss_i_connect
 
-
-
-        connect = connect_1[:]
-        if is_train:
-            temp_connect = connect_tree[0][:]
+        connect = first_level_connect[:]
         level = 0
         while (is_train and level+1 < len(connect_tree)) or (not is_train and len(connect) != 1) and (level <= len(sentence)):
             if is_train:
@@ -521,14 +578,13 @@ class BottomUpParser(object):
                 if len(temp_connect) == 1:
                     break
                 next_connect = connect_tree[level+1]
-                #next_labels = level_gold[level+2]
             else:
                 temp_connect = connect[:]
                 temp_labels = []
                 next_connect = []
             label, lossi_label, connect, lossi_connect = Helper(temp_labels, temp_connect, next_connect)
-            loss_label = loss_label + lossi_label
-            loss_connect = loss_connect + lossi_connect
+            label_loss = label_loss + lossi_label
+            connect_loss = connect_loss + lossi_connect
 
             # 根据connect值与label值还原出数据集形式的parsetree
             j = 0
@@ -608,7 +664,7 @@ class BottomUpParser(object):
             tree_str = tree_str + part
         tree_str = tree_str + ")"
 
-        return tree_str,loss_label,loss_connect
+        return tree_str,label_loss,connect_loss
 
 
 
